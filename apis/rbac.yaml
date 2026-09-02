@@ -1,0 +1,32 @@
+# Crossplane v2 composes arbitrary Kubernetes resources directly, which is why
+# there is no provider-kubernetes here. It does need permission: this ClusterRole
+# aggregates into Crossplane's own via the label below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-compose-metal
+  labels:
+    rbac.crossplane.io/aggregate-to-crossplane: "true"
+rules:
+  - apiGroups: ["metal3.io", "ipam.metal3.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups:
+      - "cluster.x-k8s.io"
+      - "infrastructure.cluster.x-k8s.io"
+      - "controlplane.cluster.x-k8s.io"
+      - "bootstrap.cluster.x-k8s.io"
+    resources: ["*"]
+    verbs: ["*"]
+  # Usage, which orders deletion so the CNI is removed before its cluster.
+  - apiGroups: ["protection.crossplane.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  # provider-helm, for the CNI. The .m. group is the namespaced variant.
+  - apiGroups: ["helm.crossplane.io", "helm.m.crossplane.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  # BMC credentials, and the kubeconfig Cluster API emits.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["*"]

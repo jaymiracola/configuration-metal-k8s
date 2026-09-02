@@ -1,0 +1,47 @@
+apiVersion: meta.dev.upbound.io/v2alpha1
+kind: Project
+metadata:
+  name: configuration-metal-k8s
+spec:
+  apiDependencies:
+  - git:
+      path: config/base/crds/bases
+      ref: v0.10.1
+      repository: https://github.com/metal3-io/baremetal-operator
+    type: crd
+  - git:
+      path: config/crd/bases
+      ref: v1.13.2
+      repository: https://github.com/metal3-io/cluster-api-provider-metal3
+    type: crd
+  - git:
+      path: config/crd/bases
+      ref: v1.13.0
+      repository: https://github.com/metal3-io/ip-address-manager
+    type: crd
+  - git:
+      path: core/config/crd/bases
+      ref: v1.14.0
+      repository: https://github.com/kubernetes-sigs/cluster-api
+    type: crd
+  dependsOn:
+  - apiVersion: pkg.crossplane.io/v1
+    kind: Function
+    package: xpkg.upbound.io/crossplane-contrib/function-auto-ready
+    version: '>=v0.0.0'
+  - apiVersion: pkg.crossplane.io/v1
+    kind: Provider
+    package: xpkg.upbound.io/crossplane-contrib/provider-helm
+    version: v1.4.0
+  description: |
+    Crossplane as the control plane for bare metal. Exposes a MetalCluster API
+    that composes Metal3 and Cluster API resources, so a physical server is
+    requested the same way as any cloud resource.
+  license: Apache-2.0
+  maintainer: Jay Miracola <jay.miracola@upbound.io>
+  readme: |
+    MetalCluster takes a registered bare metal server that Ironic can reach over
+    Redfish and returns a running Kubernetes cluster. See the repository README
+    for the reference architecture.
+  repository: xpkg.upbound.io/upbound-demo/configuration-metal-k8s
+  source: github.com/jaymiracola/configuration-metal-k8s

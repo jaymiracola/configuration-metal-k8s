@@ -1,0 +1,20 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: metalclusters.metal.kube.farm
+spec:
+  compositeTypeRef:
+    apiVersion: metal.kube.farm/v1alpha1
+    kind: MetalCluster
+  mode: Pipeline
+  pipeline:
+  - functionRef:
+      name: upbound-demo-configuration-metal-k8scompose-metal
+    step: compose-metal
+  - functionRef:
+      name: crossplane-contrib-function-auto-ready
+    input:
+      apiVersion: autoready.fn.crossplane.io/v1beta1
+      kind: Input
+      metadata: {}
+    step: crossplane-contrib-function-auto-ready

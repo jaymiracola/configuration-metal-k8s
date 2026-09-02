@@ -1,0 +1,91 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: metalclusters.metal.kube.farm
+spec:
+  group: metal.kube.farm
+  names:
+    categories:
+    - crossplane
+    kind: MetalCluster
+    plural: metalclusters
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        description: MetalCluster is the Schema for the MetalCluster API.
+        properties:
+          spec:
+            description: MetalClusterSpec defines the desired state of MetalCluster.
+            properties:
+              cni:
+                properties:
+                  ciliumVersion:
+                    description: Cilium chart version to install on the workload cluster.
+                    type: string
+                type: object
+              host:
+                properties:
+                  bootInterface:
+                    type: string
+                  pool:
+                    type: string
+                type: object
+              kubernetes:
+                properties:
+                  imageChecksum:
+                    type: string
+                  imageChecksumType:
+                    type: string
+                  imageDiskFormat:
+                    type: string
+                  imageURL:
+                    type: string
+                  version:
+                    type: string
+                type: object
+              network:
+                properties:
+                  dnsServer:
+                    type: string
+                  gateway:
+                    type: string
+                  nodeIP:
+                    type: string
+                  podCIDR:
+                    type: string
+                  prefix:
+                    type: number
+                  serviceCIDR:
+                    type: string
+                type: object
+            type: object
+          status:
+            description: MetalClusterStatus defines the observed state of MetalCluster.
+            properties:
+              # Hand-added. `up xrd generate` infers the schema from the example
+              # XR, which has no status, so regenerating this file drops these.
+              # Surfaced so an operator does not have to dig through CAPI objects.
+              controlPlaneEndpoint:
+                description: host:port of the workload cluster's API server.
+                type: string
+              kubeconfigSecret:
+                description: |
+                  Name of the Secret in this namespace holding the workload
+                  cluster's kubeconfig, emitted by Cluster API.
+                type: string
+              hostPool:
+                description: Label value used to select a BareMetalHost.
+                type: string
+              controlPlaneAvailable:
+                description: |
+                  True once the Cluster API Cluster reports Available, which is
+                  the signal that the control plane is actually up.
+                type: boolean
+            type: object
+        required:
+        - spec
+        type: object
+    served: true

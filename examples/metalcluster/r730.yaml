@@ -1,0 +1,28 @@
+# One object turns a registered bare metal server into a Kubernetes cluster.
+apiVersion: metal.kube.farm/v1alpha1
+kind: MetalCluster
+metadata:
+  name: r730
+  namespace: metal
+spec:
+  host:
+    # Selects any available BareMetalHost with this pool label, so the same
+    # definition works against a pool of identical machines.
+    pool: r730
+    # Interface name as the node's OS enumerates it, from inspection data.
+    bootInterface: enp4s0f1
+  network:
+    nodeIP: 192.168.120.70
+    prefix: 24
+    gateway: 192.168.120.1
+    dnsServer: 192.168.120.1
+    podCIDR: 10.244.0.0/16
+    serviceCIDR: 10.96.0.0/12
+  kubernetes:
+    version: v1.36.2
+    imageURL: http://192.168.120.249:8080/UBUNTU_24.04_NODE_IMAGE_K8S_v1.36.2.qcow2
+    imageChecksum: df51116494f73337c9ab882f0e16f1aa9910a666325e179741a7ed37af7fe2ce
+    imageChecksumType: sha256
+    imageDiskFormat: qcow2
+  cni:
+    ciliumVersion: 1.20.1

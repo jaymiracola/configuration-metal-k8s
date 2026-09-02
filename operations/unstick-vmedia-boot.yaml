@@ -1,0 +1,369 @@
+# Recovers a host whose cleaning stalled because the ramdisk never booted.
+#
+# On Dell, the iDRAC only adds the virtual optical drive to the UEFI boot
+# sequence while media is attached, and appends it last. Ironic's one-shot
+# boot override is supposed to make that irrelevant and does not, so once a
+# machine has a bootable OS on disk it boots that instead of the cleaning
+# ramdisk. Ironic then times out and retries, and the retry reaches
+# "available" without ever running the wipe.
+#
+# This fires when provisioning or deprovisioning starts, waits for Ironic to
+# attach the media, and puts the virtual optical drive first, leaving time for
+# the machine to POST and boot the ramdisk.
+#
+# Both phases are affected. A deploy survives only because the clean before it
+# erases the disk, so a teardown that skips the erase breaks the next build.
+#
+# Reacting to the timeout does not work. Ironic writes "Cleaning failed" after
+# giving up, reaches available about 90 seconds later, and this machine needs
+# five minutes to POST.
+#
+# Delete this once Ironic's Dell boot override works. Nothing else depends
+# on it.
+---
+# function-python rather than function-kcl: Crossplane only runs functions in
+# an Operation if they declare the "operation" capability, and at the time of
+# writing function-python is the one that does.
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-python
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-python:v0.5.0
+---
+# Crossplane applies the Job below, so it needs to be able to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-unstick-vmedia-boot
+  labels:
+    rbac.crossplane.io/aggregate-to-crossplane: "true"
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unstick-vmedia-boot
+  namespace: metal
+data:
+  # Moves the iDRAC virtual optical drive to the front of UefiBootSeq, stages
+  # it as a BIOS job, and resets. One reset is enough: it applies the job, and
+  # Ironic's own retry provides the boot that follows.
+  #
+  # This runs in a Job rather than in the function so the BMC credentials stay
+  # in a secretKeyRef and never pass through the pipeline.
+  unstick.py: |
+    import base64
+    import json
+    import os
+    import ssl
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    BASE = os.environ["BMC_URL"].rstrip("/")
+    USER = os.environ["BMC_USERNAME"]
+    PASS = os.environ["BMC_PASSWORD"]
+    FIRST = "Optical.iDRACVirtual.1-1"
+
+    SYS = "/redfish/v1/Systems/System.Embedded.1"
+    SETTINGS = SYS + "/BootSources/Settings"
+    JOBS = "/redfish/v1/Managers/iDRAC.Embedded.1/Jobs"
+    UNFINISHED = ("Scheduled", "New", "Running", "Downloading", "Waiting")
+
+    CTX = ssl.create_default_context()
+    CTX.check_hostname = False
+    CTX.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=CTX))
+
+    # Send Basic auth on the first request. urllib's HTTPBasicAuthHandler waits
+    # for a 401 and retries, and iDRAC answers that retry with 400.
+    AUTH = "Basic " + base64.b64encode(
+        ("%s:%s" % (USER, PASS)).encode()).decode()
+
+
+    def call(method, path, body=None, allow=(), tries=12):
+        """One Redfish call, riding out a BMC that is busy or restarting.
+
+        iDRAC8 returns 503 under modest request rates, serves HTML error pages
+        while it comes up, and disappears entirely for a few minutes after a
+        controller reset, which the sibling remediation may have just issued.
+        None of those are fatal. Statuses in `allow` come back to the caller
+        instead of aborting, so it can branch on them.
+        """
+        data = json.dumps(body).encode() if body is not None else None
+        delay = 5
+        for attempt in range(tries):
+            last = None
+            req = urllib.request.Request(BASE + path, data=data, method=method)
+            req.add_header("Authorization", AUTH)
+            if data:
+                req.add_header("Content-Type", "application/json")
+            try:
+                with opener.open(req, timeout=60) as resp:
+                    raw = resp.read()
+                    try:
+                        return resp.status, (json.loads(raw) if raw else {})
+                    except ValueError:
+                        # An HTML error page: answering, but not ready.
+                        last = "non-JSON response"
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")
+                if e.code in allow:
+                    return e.code, detail
+                if e.code != 503:
+                    raise SystemExit("%s %s failed: HTTP %d %s"
+                                     % (method, path, e.code, detail[:400]))
+                last = "HTTP 503"
+            except (urllib.error.URLError, OSError) as e:
+                # Unreachable or refused: a controller reset in flight.
+                last = str(e)
+            if attempt == tries - 1:
+                raise SystemExit("%s %s: no usable response after %d tries (%s)"
+                                 % (method, path, tries, last))
+            time.sleep(delay)
+            delay = min(delay * 2, 30)
+
+
+    def clear_pending_jobs():
+        """Delete unfinished config jobs, slowly.
+
+        iDRAC8 has no DeleteJobQueue action, so this is one request per job and
+        that is exactly what provokes 503. Pace it, and only touch jobs that are
+        actually pending: completed ones are history.
+        """
+        _, listing = call("GET", JOBS)
+        for member in (listing.get("Members") or []):
+            uri = member.get("@odata.id")
+            if not uri:
+                continue
+            time.sleep(1)
+            _, job = call("GET", uri)
+            if job.get("JobState") in UNFINISHED:
+                code, _ = call("DELETE", uri)
+                print("  cleared %s (%s): %s"
+                      % (job.get("Id"), job.get("JobState"), code))
+
+
+    # This starts as soon as deprovisioning does, which is before Ironic has
+    # attached the media, and the iDRAC only adds the boot entry once it has.
+    # So wait for it. Stay well inside [conductor]clean_callback_timeout, since
+    # the reorder still needs a POST to take effect afterwards.
+    deadline = time.time() + 5 * 60
+    while True:
+        _, cur = call("GET", SYS + "/BootSources")
+        seq = (cur.get("Attributes") or {}).get("UefiBootSeq") or []
+        target = [e for e in seq if e.get("Name") == FIRST]
+        if target:
+            break
+        if time.time() >= deadline:
+            print("%s never appeared, media was not attached" % FIRST)
+            sys.exit(0)
+        print("waiting for %s" % FIRST)
+        time.sleep(20)
+
+    if target[0].get("Index") == 0:
+        print("%s already first, nothing to do" % FIRST)
+        sys.exit(0)
+
+    ordered = target + [e for e in seq if e.get("Name") != FIRST]
+    desired = [
+        {"Id": e["Id"], "Index": i, "Enabled": bool(e.get("Enabled", True)),
+         "Name": e["Name"]}
+        for i, e in enumerate(ordered)
+    ]
+    print("reordering:", ", ".join("%d=%s" % (e["Index"], e["Name"]) for e in desired))
+
+    payload = {"Attributes": {"UefiBootSeq": desired}}
+    code, body = call("PATCH", SETTINGS, payload, allow=(400,))
+
+    # SYS011 means a config job from an earlier attempt is still scheduled and
+    # the iDRAC will not accept another set until it goes. Clearing the queue
+    # up front would cost a request per job on every run, so only pay that
+    # when it actually happens.
+    if code == 400 and "SYS011" in str(body):
+        print("pending config job blocks the set, clearing:")
+        clear_pending_jobs()
+        code, body = call("PATCH", SETTINGS, payload)
+    elif code == 400:
+        raise SystemExit("PATCH %s failed: HTTP 400 %s" % (SETTINGS, str(body)[:400]))
+    print("stage boot order:", code)
+
+    code, _ = call("POST", JOBS, {"TargetSettingsURI": SETTINGS})
+    print("schedule bios job:", code)
+
+    # ForceRestart on a powered-off host is rejected, and Ironic may well have
+    # powered it off by now, so pick the action that matches the current state.
+    _, system = call("GET", SYS)
+    action = "ForceRestart" if system.get("PowerState") == "On" else "On"
+    code, _ = call("POST", SYS + "/Actions/ComputerSystem.Reset",
+                   {"ResetType": action})
+    print("%s:" % action, code)
+  # Resets the management controller. Dell's documented remedy when the virtual
+  # media service starts answering InsertMedia with Base.1.2.InternalError,
+  # which it does after heavy media cycling. The host keeps running; only the
+  # controller reboots, and it takes a few minutes to come back.
+  reset-bmc.py: |
+    import base64
+    import json
+    import os
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    BASE = os.environ["BMC_URL"].rstrip("/")
+    AUTH = "Basic " + base64.b64encode(
+        ("%s:%s" % (os.environ["BMC_USERNAME"],
+                    os.environ["BMC_PASSWORD"])).encode()).decode()
+
+    CTX = ssl.create_default_context()
+    CTX.check_hostname = False
+    CTX.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=CTX))
+
+    path = "/redfish/v1/Managers/iDRAC.Embedded.1/Actions/Manager.Reset"
+    req = urllib.request.Request(
+        BASE + path, data=json.dumps({"ResetType": "GracefulRestart"}).encode(),
+        method="POST")
+    req.add_header("Authorization", AUTH)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with opener.open(req, timeout=60) as resp:
+            print("bmc reset:", resp.status)
+    except urllib.error.HTTPError as e:
+        raise SystemExit("bmc reset failed: HTTP %d %s"
+                         % (e.code, e.read().decode("utf-8", "replace")[:300]))
+
+---
+apiVersion: ops.crossplane.io/v1alpha1
+kind: WatchOperation
+metadata:
+  name: unstick-vmedia-boot
+spec:
+  # One at a time. A second reset while the first is applying helps nothing.
+  concurrencyPolicy: Forbid
+  successfulHistoryLimit: 3
+  failedHistoryLimit: 3
+  watch:
+    apiVersion: metal3.io/v1alpha1
+    kind: BareMetalHost
+    namespace: metal
+  operationTemplate:
+    spec:
+      mode: Pipeline
+      pipeline:
+        - step: unstick
+          functionRef:
+            name: function-python
+          input:
+            apiVersion: python.fn.crossplane.io/v1beta1
+            kind: Script
+            script: |
+              from crossplane.function.proto.v1 import run_function_pb2 as fnv1
+
+              WATCHED = "ops.crossplane.io/watched-resource"
+
+
+              def get(obj, *path):
+                  cur = obj
+                  for key in path:
+                      if key not in cur:
+                          return None
+                      cur = cur[key]
+                  return cur
+
+
+              def job(name, script, bmc_url, creds):
+                  """A Job running one of the ConfigMap's scripts against this BMC.
+
+                  The credentials come from the host's own Secret by reference, so they
+                  never pass through the pipeline or show up in Operation status.
+                  """
+                  return {
+                      "apiVersion": "batch/v1",
+                      "kind": "Job",
+                      "metadata": {"name": name[:63], "namespace": "metal"},
+                      "spec": {
+                          "backoffLimit": 2,
+                          "ttlSecondsAfterFinished": 3600,
+                          "template": {
+                              "spec": {
+                                  "restartPolicy": "Never",
+                                  "containers": [{
+                                      "name": "remediate",
+                                      "image": "python:3.12-alpine",
+                                      "command": ["python3", "/script/" + script],
+                                      "env": [
+                                          {"name": "BMC_URL", "value": bmc_url},
+                                          {"name": "BMC_USERNAME", "valueFrom": {
+                                              "secretKeyRef": {"name": creds,
+                                                               "key": "username"}}},
+                                          {"name": "BMC_PASSWORD", "valueFrom": {
+                                              "secretKeyRef": {"name": creds,
+                                                               "key": "password"}}},
+                                      ],
+                                      "volumeMounts": [{"name": "script",
+                                                        "mountPath": "/script"}],
+                                  }],
+                                  "volumes": [{"name": "script",
+                                               "configMap": {"name": "unstick-vmedia-boot"}}],
+                              },
+                          },
+                      },
+                  }
+
+
+              def operate(req: fnv1.RunFunctionRequest, rsp: fnv1.RunFunctionResponse):
+                  found = req.required_resources.get(WATCHED)
+                  if found is None or len(found.items) == 0:
+                      return
+
+                  host = found.items[0].resource
+                  state = get(host, "status", "provisioning", "state") or ""
+                  error = get(host, "status", "errorMessage") or ""
+
+                  name = get(host, "metadata", "name") or ""
+                  creds = get(host, "spec", "bmc", "credentialsName") or ""
+                  address = get(host, "spec", "bmc", "address") or ""
+
+                  # spec.bmc.address is an Ironic driver URL rather than an HTTP one, e.g.
+                  #   idrac-virtualmedia+https://host/redfish/v1/Systems/...
+                  # Keep the scheme and host, drop the prefix and the path.
+                  parts = address.split("+")[-1].split("/")
+                  if len(parts) < 3 or not name or not creds:
+                      return
+                  bmc_url = parts[0] + "//" + parts[2]
+
+                  # The BMC's media service has failed rather than the boot order losing.
+                  # Ironic never got the ISO mounted, so there is nothing to reorder and the
+                  # remedy is a controller reset, after which Ironic's retry can mount.
+                  if "Virtual media mount failed" in error:
+                      count = int(get(host, "status", "errorCount") or 0)
+                      rsp.desired.resources["bmc-reset"].resource.update(
+                          job("%s-bmcreset-%d" % (name, count), "reset-bmc.py",
+                              bmc_url, creds))
+                      rsp.output["action"] = "%s: bmc reset" % name
+                      return
+
+                  # Both of these boot a ramdisk over virtual media and both lose to a
+                  # bootable disk. Deprovisioning cleans, provisioning writes the image.
+                  # Every other change to a BareMetalHost also lands here.
+                  if state not in ("deprovisioning", "provisioning"):
+                      return
+
+                  # consumerRef changes once per cluster build, and the phase distinguishes
+                  # the deploy rescue from the teardown rescue within one build.
+                  consumer = get(host, "spec", "consumerRef", "name") or "none"
+                  rsp.desired.resources["unstick-job"].resource.update(
+                      job("%s-%s-%s" % (name, state[:6], consumer), "unstick.py",
+                          bmc_url, creds))
+                  rsp.output["action"] = "%s: boot order, %s" % (name, state)
