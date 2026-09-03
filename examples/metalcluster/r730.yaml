@@ -10,7 +10,7 @@ spec:
     # definition works against a pool of identical machines.
     pool: r730
     # Interface name as the node's OS enumerates it, from inspection data.
-    bootInterface: enp4s0f1
+    bootInterface: enp130s0f1
   network:
     nodeIP: 192.168.120.70
     prefix: 24
