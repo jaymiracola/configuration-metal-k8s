@@ -223,6 +223,12 @@ items = [
                     controlPlane = {}
                     nodeRegistration = _nodeRegistration
                 }
+                # The node image ships kubelet.service disabled, against the
+                # distro preset. kubeadm starts it during provisioning without
+                # enabling it, so the cluster works until the machine reboots
+                # and then comes back with cri-o up, static pod manifests in
+                # place, and no kubelet to read them.
+                postKubeadmCommands = ["systemctl enable kubelet"]
                 # cloud-init applies this at first boot only, so a cluster
                 # built without keys cannot be given them without a rebuild.
                 if len(_sshKeys) > 0:
