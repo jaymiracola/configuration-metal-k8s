@@ -20,6 +20,21 @@ spec:
           spec:
             description: MetalClusterSpec defines the desired state of MetalCluster.
             properties:
+              access:
+                description: |
+                  Optional login on the provisioned node. Without it the node
+                  has no shell, so a failure that leaves the API server down
+                  cannot be diagnosed from anywhere.
+                properties:
+                  sshAuthorizedKeys:
+                    description: Public keys authorised for the node's admin user.
+                    items:
+                      type: string
+                    type: array
+                  username:
+                    description: Admin user to create. Defaults to metal3.
+                    type: string
+                type: object
               cni:
                 properties:
                   ciliumVersion:

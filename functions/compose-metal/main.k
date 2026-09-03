@@ -64,6 +64,10 @@ _clusterAvailable = len([
 
 # kubelet needs the node name and the metal3 uuid label; these are rendered by
 # the Metal3 data template at provisioning time, not by KCL.
+_access = _spec?.access or {}
+_sshKeys = _access?.sshAuthorizedKeys or []
+_sshUser = _access?.username or "metal3"
+
 _nodeRegistration = {
     name = "{{ ds.meta_data.name }}"
     # Empty taint list overrides kubeadm's default
@@ -219,6 +223,14 @@ items = [
                     controlPlane = {}
                     nodeRegistration = _nodeRegistration
                 }
+                # cloud-init applies this at first boot only, so a cluster
+                # built without keys cannot be given them without a rebuild.
+                if len(_sshKeys) > 0:
+                    users = [{
+                        name = _sshUser
+                        sshAuthorizedKeys = _sshKeys
+                        sudo = "ALL=(ALL) NOPASSWD:ALL"
+                    }]
             }
         }
     }
