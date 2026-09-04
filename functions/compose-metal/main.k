@@ -14,6 +14,8 @@ import models.farm.kube.metal.v1alpha1 as metalv1
 import models.io.metal3.ipam.v1alpha1 as ipam
 import models.io.k8s.clusterx.v1beta2 as capi
 import models.io.k8s.clusterx.infrastructure.v1beta2 as m3
+import models.io.crossplane.helmm.v1beta1 as helm
+import models.io.crossplane.protection.v1beta1 as protection
 
 oxr = option("params").oxr
 _ocds = option("params").ocds
@@ -198,9 +200,16 @@ items = [
             }
         }
     }
-    # Untyped, unlike the rest. `up` deduplicates apiDependencies by repository,
-    # so the cluster-api CRDs can only be pulled from one path, and core (for
-    # Cluster) is the more valuable one. Everything else here is type-checked.
+    # The only object here without a schema, and not for want of trying.
+    # `up` keeps one git apiDependency per repository and that one is spent on
+    # core for Cluster, but an http apiDependency does get the CRD in. The
+    # generated model then fails to compile: two validation constraints are
+    # emitted with no separator between them, so KCL reads a stray `if`.
+    #
+    #   kubeadmcontrolplane.k:171
+    #   all n in mounts {len(mounts) <= 512 if ...[None, Undefined]len(mounts) >= 1 if ...}
+    #
+    # Worth re-checking on a later `up`; the fields used below are stable.
     {
         apiVersion = "controlplane.cluster.x-k8s.io/v1beta2"
         kind = "KubeadmControlPlane"
@@ -247,9 +256,7 @@ items = [
     # until the control plane is up; Crossplane reconciles until it does.
     #
     # helm.m.crossplane.io is the namespaced API group a namespaced XR composes.
-    {
-        apiVersion = "helm.m.crossplane.io/v1beta1"
-        kind = "ProviderConfig"
+    helm.ProviderConfig {
         metadata = _metadata("helm-providerconfig") | {
             name = _cluster
             namespace = _ns
@@ -265,9 +272,7 @@ items = [
             }
         }
     }
-    {
-        apiVersion = "helm.m.crossplane.io/v1beta1"
-        kind = "Release"
+    helm.Release {
         # No readiness annotation: a helm Release has a real Ready condition, so
         # the XR only reports Ready once the CNI is installed.
         metadata = _metadataAuto("cilium") | {
@@ -296,9 +301,7 @@ items = [
             }
         }
     }
-    {
-        apiVersion = "protection.crossplane.io/v1beta1"
-        kind = "Usage"
+    protection.Usage {
         metadata = _metadata("cilium-needs-cluster") | {
             name = "{}-cilium-needs-cluster".format(_cluster)
             namespace = _ns
