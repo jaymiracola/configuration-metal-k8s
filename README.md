@@ -217,7 +217,17 @@ several terabytes up, somewhere the same card never sees in a workstation.
 Dell's guidance for NVIDIA cards in a PowerEdge with a lot of memory is to keep
 `Memory Mapped I/O above 4GB` enabled and bring the MMIO base down to 512GB; on
 a 13th generation box that is the `LowerMmio` BIOS attribute, and it caps
-addressable memory below 512GB in exchange.
+addressable memory below 512GB in exchange. Worth setting, but it was not the
+cause here: it moved this card's BAR1 from `0x3bfe0000000` to `0xbfe0000000`,
+42 bits down to 40, and the failure did not change.
+
+The list of things that turned out not to matter on this machine is worth having,
+because each one costs a reboot to test: the primary display adapter and the
+option ROM, the auxiliary power cable and the riser, the driver branch (595 and
+580 fail identically), MMIO base placement, and a full power-off cycle. A
+consumer Ampere card that works in a workstation can still fail to hand off its
+GSP falcon on a Haswell-era server, and none of the usual server GPU checklists
+address it.
 
 ### 3. Use the cluster
 
