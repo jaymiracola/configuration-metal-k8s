@@ -240,3 +240,19 @@ scripts/install-prereqs.sh  everything above the MetalCluster API
 The example builds one machine. Scaling out is a replica count plus a
 `MachineDeployment`, with no change to the model. The example also removes the
 control-plane taint so the machine can run workloads.
+
+One machine in the pool also means the control plane cannot roll. Changing
+anything under `kubeadmConfigSpec` makes `KubeadmControlPlane` stand up a
+replacement Machine before retiring the old one, and with no second registered
+host that Machine sits at `AssociateBareMetalHost: no available host found`
+while `ScalingDown` waits on it. The strategy that would reverse that order is
+refused below three replicas:
+
+```
+spec.rollout.strategy.rollingUpdate: Required value: when KubeadmControlPlane
+is configured to scale-in, replica count needs to be at least 3
+```
+
+So a config change on a single-host pool needs either a second registered host
+or a manual `kubectl delete machine` on the outdated one to free the host it
+holds.
