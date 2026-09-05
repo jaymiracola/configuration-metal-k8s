@@ -41,6 +41,25 @@ spec:
                     description: Cilium chart version to install on the workload cluster.
                     type: string
                 type: object
+              gpu:
+                description: |
+                  NVIDIA GPU enablement on the provisioned node. Installs the
+                  kernel driver, the container toolkit, and the DRA driver that
+                  publishes the gpu.nvidia.com DeviceClass, so a GPU is
+                  requested through resource.k8s.io rather than as an extended
+                  resource.
+                properties:
+                  driverVersion:
+                    description: |
+                      NVIDIA driver version. Defaults to the chart's own pin.
+                    type: string
+                  enabled:
+                    description: Install the GPU Operator. Defaults to false.
+                    type: boolean
+                  operatorVersion:
+                    description: GPU Operator chart version.
+                    type: string
+                type: object
               host:
                 properties:
                   bootInterface:

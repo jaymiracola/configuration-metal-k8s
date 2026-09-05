@@ -141,7 +141,7 @@ kubectl apply -f examples/metalcluster/r730.yaml
 spec:
   host:
     pool: r730                 # selects any registered host with this label
-    bootInterface: enp4s0f1
+    bootInterface: enp130s0f1
   network:
     nodeIP: 192.168.120.70
     prefix: 24
@@ -157,6 +157,9 @@ spec:
     imageDiskFormat: qcow2
   cni:
     ciliumVersion: 1.20.1
+  gpu:
+    enabled: true
+    operatorVersion: v26.7.0
 ```
 
 That composes an `IPPool`, a Cluster API `Cluster`, `Metal3Cluster`,
@@ -165,6 +168,19 @@ provider-helm `ProviderConfig` and `Release`. Cluster API Provider Metal3 claims
 matching host, Ironic powers it through the BMC and attaches a generated boot ISO
 as virtual media, the agent writes the image, kubeadm runs, and provider-helm
 installs the CNI so the node reaches `Ready` unattended.
+
+`gpu.enabled` adds a second `Release` for the NVIDIA GPU Operator. Chart v26.7
+deploys a `GPUCluster` instead of a `ClusterPolicy`, which brings the kernel
+driver and the container toolkit up together with the DRA driver, so a workload
+asks for a GPU through `resource.k8s.io` against the `gpu.nvidia.com`
+DeviceClass rather than as an `nvidia.com/gpu` extended resource. The two CRs
+are mutually exclusive and only the `GPUCluster` path publishes a DeviceClass.
+Set `gpu.driverVersion` to pin the driver; left unset it follows the chart.
+
+The driver module is compiled against the running kernel on first start, which
+takes a few minutes. Precompiled driver images exist only for the kernel
+revisions NVIDIA has published tags for, and those lag the distro archive, so
+the node's kernel will usually not be among them.
 
 ### 3. Use the cluster
 

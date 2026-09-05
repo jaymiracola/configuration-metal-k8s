@@ -4,7 +4,7 @@ that provisions a Kubernetes cluster on a physical server.
 
 Composes IPPool, Cluster, Metal3Cluster, Metal3MachineTemplate,
 Metal3DataTemplate, KubeadmControlPlane, and a provider-helm ProviderConfig and
-Release for the CNI.
+Release for the CNI, plus a second Release for the GPU stack when asked.
 
 The BareMetalHost and its credentials Secret are not composed; hosts
 are registered separately and selected by label.
@@ -27,6 +27,7 @@ _host = _spec.host
 _net = _spec.network
 _k8s = _spec.kubernetes
 _cni = _spec.cni
+_gpu = _spec?.gpu or {}
 _ns = oxr.metadata.namespace
 
 _cluster = "{}-cluster".format(_name)
@@ -84,6 +85,17 @@ _nodeRegistration = {
         }
     ]
 }
+
+# The GPU section is optional, so every read below is guarded.
+_gpuEnabled = _gpu?.enabled or False
+_driverVersion = _gpu?.driverVersion or ""
+_driverValues = {
+    nvidiaDriverCRD = {enabled = True}
+    # Precompiled driver images are published per kernel revision and lag the
+    # distro archive, so the module is built against the running kernel at
+    # load time instead of being pulled ready-made.
+    usePrecompiled = False
+} | ({version = _driverVersion} if _driverVersion != "" else {})
 
 items = [
     ipam.IPPool {
@@ -321,6 +333,67 @@ items = [
             }
         }
     }
+    # One chart covers the whole GPU stack. v26.7 folds the DRA driver into
+    # the operator behind the GPUCluster CR, so the kernel driver, the
+    # container toolkit and the DeviceClass a workload binds against all move
+    # together on one version.
+    if _gpuEnabled:
+        helm.Release {
+            metadata = _metadataAuto("gpu-operator") | {
+                name = "{}-gpu-operator".format(_cluster)
+                namespace = _ns
+            }
+            spec = {
+                providerConfigRef = {
+                    kind = "ProviderConfig"
+                    name = _cluster
+                }
+                forProvider = {
+                    namespace = "gpu-operator"
+                    chart = {
+                        name = "gpu-operator"
+                        repository = "https://nvidia.github.io/gpu-operator"
+                        version = _gpu.operatorVersion
+                    }
+                    values = {
+                        # ClusterPolicy is the device-plugin stack and
+                        # GPUCluster is the DRA stack. The chart refuses to
+                        # deploy both.
+                        clusterPolicy = {deployCR = False}
+                        gpuCluster = {deployCR = True}
+                        driver = _driverValues
+                        draDriver = {
+                            # Multi-node NVLink fabric. One box, one card.
+                            computeDomains = {enabled = False}
+                        }
+                        # The exporter still serves metrics; only the
+                        # ServiceMonitor goes, because the Prometheus Operator
+                        # CRD that defines it is not installed here.
+                        dcgmExporter = {serviceMonitor = {enabled = False}}
+                    }
+                }
+            }
+        }
+        protection.Usage {
+            metadata = _metadata("gpu-operator-needs-cluster") | {
+                name = "{}-gpu-needs-cluster".format(_cluster)
+                namespace = _ns
+            }
+            spec = {
+                reason = "The GPU operator must be uninstalled before the cluster hosting it is destroyed."
+                replayDeletion = True
+                of = {
+                    apiVersion = "cluster.x-k8s.io/v1beta2"
+                    kind = "Cluster"
+                    resourceRef = {name = _cluster}
+                }
+                by = {
+                    apiVersion = "helm.m.crossplane.io/v1beta1"
+                    kind = "Release"
+                    resourceRef = {name = "{}-gpu-operator".format(_cluster)}
+                }
+            }
+        }
     # Updating the composite goes through `items` as well.
     metalv1.MetalCluster {
         metadata = {

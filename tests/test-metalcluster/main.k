@@ -16,6 +16,9 @@ build time rather than after a 20 minute provisioning cycle:
     destroyed rather than being stranded on a finalizer
   * diskFormat, which v1beta2 renamed from format
   * a single-address IP pool matching the control plane endpoint
+  * the GPU stack takes the DRA path, not the device-plugin path, since the
+    two ClusterPolicy/GPUCluster CRs are mutually exclusive and only one of
+    them publishes the gpu.nvidia.com DeviceClass
 """
 
 import models.io.k8s.clusterx.infrastructure.v1beta2 as m3
@@ -136,6 +139,51 @@ items = [
                         }
                         # The assertion that matters most: an empty taint list.
                         kubeadmConfigSpec.initConfiguration.nodeRegistration.taints: []
+                    }
+                }
+                {
+                    apiVersion: "helm.m.crossplane.io/v1beta1"
+                    kind: "Release"
+                    metadata.name: "r730-cluster-gpu-operator"
+                    spec: {
+                        providerConfigRef: {
+                            kind: "ProviderConfig"
+                            name: "r730-cluster"
+                        }
+                        forProvider: {
+                            namespace: "gpu-operator"
+                            chart: {
+                                name: "gpu-operator"
+                                repository: "https://nvidia.github.io/gpu-operator"
+                                version: "v26.7.0"
+                            }
+                            values: {
+                                clusterPolicy.deployCR: False
+                                gpuCluster.deployCR: True
+                                driver: {
+                                    nvidiaDriverCRD.enabled: True
+                                    usePrecompiled: False
+                                }
+                            }
+                        }
+                    }
+                }
+                {
+                    apiVersion: "protection.crossplane.io/v1beta1"
+                    kind: "Usage"
+                    metadata.name: "r730-cluster-gpu-needs-cluster"
+                    spec: {
+                        replayDeletion: True
+                        of: {
+                            apiVersion: "cluster.x-k8s.io/v1beta2"
+                            kind: "Cluster"
+                            resourceRef.name: "r730-cluster"
+                        }
+                        by: {
+                            apiVersion: "helm.m.crossplane.io/v1beta1"
+                            kind: "Release"
+                            resourceRef.name: "r730-cluster-gpu-operator"
+                        }
                     }
                 }
             ]
