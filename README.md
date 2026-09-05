@@ -182,6 +182,32 @@ takes a few minutes. Precompiled driver images exist only for the kernel
 revisions NVIDIA has published tags for, and those lag the distro archive, so
 the node's kernel will usually not be among them.
 
+A GeForce card in a server needs one BIOS change that has nothing to do with
+Kubernetes. A server initialises only its embedded video controller at POST, so
+an add-in card's VBIOS is never executed, and on Ampere and later that VBIOS is
+what boots the GPU firmware the driver waits for. The driver loads, finds
+nothing, and says so:
+
+```
+NVRM: GPU0 gpuWaitForGfwBootComplete_TU102: GSP failed to halt with GFW_BOOT: (progress 0xff)
+NVRM: GPU0 RmInitAdapter: Cannot initialize GSP firmware RM
+nvidia-smi: No devices were found
+```
+
+Confirm it by reading `boot_vga`, which is `1` on the card the BIOS brought up:
+
+```
+/sys/bus/pci/devices/0000:04:00.0/boot_vga = 0   the GeForce
+/sys/bus/pci/devices/0000:0b:00.0/boot_vga = 1   the embedded controller
+```
+
+On a PowerEdge the setting is the `EmbVideo` BIOS attribute, readable over
+Redfish at `/redfish/v1/Systems/System.Embedded.1/Bios`. Setting it to
+`Disabled` promotes the add-in card to primary so its VBIOS runs. That costs the
+iDRAC virtual console, which shares the embedded controller. Redfish, virtual
+media and power control are unaffected, so provisioning still works; you just
+lose the ability to watch POST.
+
 ### 3. Use the cluster
 
 ```bash
