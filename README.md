@@ -209,6 +209,11 @@ cascades to the Cluster, which deprovisions the machine and wipes the disk:
 kubectl -n metal delete metalcluster r730
 ```
 
+If a drain has already cordoned the node, uncordon it before deleting the XR.
+The GPU operator uninstalls through a pre-delete hook Job, and a Job that cannot
+be scheduled leaves the `Release` uninstalling forever, which the `Usage` then
+correctly refuses to let the `Cluster` outrun.
+
 The registered host is not composed, so it survives and returns to `available`,
 ready for the next `MetalCluster`. Hardware inventory stays separate from cluster
 lifecycle, so a rebuild skips inspection.
@@ -253,6 +258,18 @@ spec.rollout.strategy.rollingUpdate: Required value: when KubeadmControlPlane
 is configured to scale-in, replica count needs to be at least 3
 ```
 
-So a config change on a single-host pool needs either a second registered host
-or a manual `kubectl delete machine` on the outdated one to free the host it
-holds.
+Deleting the outdated Machine by hand does not break the tie either. KCP holds
+a `pre-terminate.delete.hook.machine.cluster.x-k8s.io/kcp-cleanup` hook on it
+and will not release that hook while no other control plane Machine is healthy:
+
+```
+Cannot delete control plane Machine when there are no control plane Machines
+with all Kubernetes control plane components in healthy state
+healthyControlPlanes=[] canSafelyTransitionToTargetState=false
+```
+
+The replacement cannot get healthy without the host, and the host is not freed
+until the hook clears. So a `kubeadmConfigSpec` change on a single-host pool
+needs either a second registered host, or deleting the `MetalCluster` and
+applying it again, which is the supported teardown and rebuilds against the
+current composition.
