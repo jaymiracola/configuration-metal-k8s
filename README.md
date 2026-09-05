@@ -182,32 +182,42 @@ takes a few minutes. Precompiled driver images exist only for the kernel
 revisions NVIDIA has published tags for, and those lag the distro archive, so
 the node's kernel will usually not be among them.
 
-A GPU that enumerates on the bus can still fail to start, and the error names a
-part of the machine most people never think about:
+A GPU that enumerates on the bus can still fail to start:
 
 ```
+NVRM: GPU0 kflcnWaitForHalt_TU102: Timeout waiting for Falcon to halt
 NVRM: GPU0 gpuWaitForGfwBootComplete_TU102: GSP failed to halt with GFW_BOOT: (progress 0xff)
 NVRM: GPU0 RmInitAdapter: Cannot initialize GSP firmware RM
 nvidia-smi: No devices were found
 ```
 
-GFW boot is the card running its own firmware out of its own flash, on its own
-PMU and GSP processors, at power-on. On Turing through Ada the driver polls a
-scratch register for that completion and refuses to attach without it. The host
-has no part in it, so this is not a BIOS video setting, not the primary display
-adapter, and not the option ROM. Time spent in those menus is wasted.
+Read that from the top, not the bottom. GFW boot is the card running its own
+firmware from its own flash on its own PMU and GSP processors at power-on, and
+progress `0xff` is the completion value, so the firmware finished. What times
+out is the GSP falcon halting afterwards. The host has no part in GFW boot, so
+this is not a BIOS video setting, not the primary display adapter, and not the
+option ROM.
 
-Because the sequence is powered by the card, a failure points at the card
-getting bus power but not working core power, or at the slot. On this machine
-that narrowed to the auxiliary power feed and the riser, after ruling out: PCIe
-link errors of every class, BAR allocation including 64-bit prefetchable space
-above 4G with `MmioAbove4Gb` enabled, `Control: I/O+ Mem+ BusMaster+`, slot
-option ROMs enabled, nouveau conflicts, and a full power-off cycle.
+Three registers off BAR0 tell you where you stand, and they are readable with a
+short mmap of `/sys/bus/pci/devices/<addr>/resource0` while the driver is bound:
 
-Server GPU power cables are the trap. A PCIe 8-pin and an EPS/CPU 8-pin are the
-same shell with different pinouts, and a card fed the wrong one can light up its
-bus-side logic from the slot's own 75 W while its core never comes up. That
-looks exactly like the error above.
+```
+0x000000  PMC_BOOT_0   0xb76000a1   (& 0x1ff00000) >> 20 = 0x176, GA106 rev a1
+0x118234  GFW_BOOT     0x000003ff   progress byte 0xff, firmware completed
+0x110100  (secured)    0xbadf5620   PRI error, privileged domain unreachable
+```
+
+A valid chip ID in `PMC_BOOT_0` means the core has power and clocks, which rules
+out the auxiliary power feed, the cable and the slot in one read. Do that before
+suspecting any of them.
+
+On a memory-heavy server, check where the card's BARs actually landed. MMIO
+placement scales with installed memory, so a 64-bit prefetchable BAR can end up
+several terabytes up, somewhere the same card never sees in a workstation.
+Dell's guidance for NVIDIA cards in a PowerEdge with a lot of memory is to keep
+`Memory Mapped I/O above 4GB` enabled and bring the MMIO base down to 512GB; on
+a 13th generation box that is the `LowerMmio` BIOS attribute, and it caps
+addressable memory below 512GB in exchange.
 
 ### 3. Use the cluster
 
