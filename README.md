@@ -182,11 +182,8 @@ takes a few minutes. Precompiled driver images exist only for the kernel
 revisions NVIDIA has published tags for, and those lag the distro archive, so
 the node's kernel will usually not be among them.
 
-A consumer GeForce card may not initialise at all in a server of this vintage,
-and that has nothing to do with wanting video out of it. On Ampere and later the
-GPU runs its own firmware, and the driver refuses to attach until that firmware
-reports a completed boot. When it never does, the driver installs correctly and
-still finds no hardware:
+A GPU that enumerates on the bus can still fail to start, and the error names a
+part of the machine most people never think about:
 
 ```
 NVRM: GPU0 gpuWaitForGfwBootComplete_TU102: GSP failed to halt with GFW_BOOT: (progress 0xff)
@@ -194,16 +191,23 @@ NVRM: GPU0 RmInitAdapter: Cannot initialize GSP firmware RM
 nvidia-smi: No devices were found
 ```
 
-What this is not, on an R730 with an RTX 3050, having checked each one: the PCIe
-link reports no correctable, non-fatal or fatal errors and no aborts; BARs are
-allocated, including a 64-bit prefetchable BAR above 4G with `MmioAbove4Gb`
-enabled; `Control: I/O+ Mem+ BusMaster+`; the card draws power; nouveau unloads
-cleanly; and a full power-off cycle does not change the result. The card answers
-on the bus correctly and only its internal firmware fails to start.
+GFW boot is the card running its own firmware out of its own flash, on its own
+PMU and GSP processors, at power-on. On Turing through Ada the driver polls a
+scratch register for that completion and refuses to attach without it. The host
+has no part in it, so this is not a BIOS video setting, not the primary display
+adapter, and not the option ROM. Time spent in those menus is wasted.
 
-Worth checking before blaming the server: whether the same card initialises in
-any other machine. That separates an Ampere-in-old-server firmware problem from
-a dead card, and nothing else here distinguishes the two.
+Because the sequence is powered by the card, a failure points at the card
+getting bus power but not working core power, or at the slot. On this machine
+that narrowed to the auxiliary power feed and the riser, after ruling out: PCIe
+link errors of every class, BAR allocation including 64-bit prefetchable space
+above 4G with `MmioAbove4Gb` enabled, `Control: I/O+ Mem+ BusMaster+`, slot
+option ROMs enabled, nouveau conflicts, and a full power-off cycle.
+
+Server GPU power cables are the trap. A PCIe 8-pin and an EPS/CPU 8-pin are the
+same shell with different pinouts, and a card fed the wrong one can light up its
+bus-side logic from the slot's own 75 W while its core never comes up. That
+looks exactly like the error above.
 
 ### 3. Use the cluster
 
