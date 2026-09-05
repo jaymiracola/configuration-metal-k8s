@@ -95,6 +95,12 @@ _driverValues = {
     # distro archive, so the module is built against the running kernel at
     # load time instead of being pulled ready-made.
     usePrecompiled = False
+    # Building it means first pulling around 55 MB of kernel packages from the
+    # distro mirror. The default budget is 60s plus 120 probes at 10s, and a
+    # slow mirror walks straight through it: one run here averaged 67 kB/s and
+    # was killed mid-download at 21 minutes, then restarted from nothing. 360
+    # probes gives the build an hour.
+    startupProbe = {failureThreshold = 360}
 } | ({version = _driverVersion} if _driverVersion != "" else {})
 
 items = [
