@@ -171,6 +171,24 @@ items = [
                 {
                     apiVersion: "protection.crossplane.io/v1beta1"
                     kind: "Usage"
+                    metadata.name: "r730-cluster-gpu-needs-cni"
+                    spec: {
+                        replayDeletion: True
+                        of: {
+                            apiVersion: "helm.m.crossplane.io/v1beta1"
+                            kind: "Release"
+                            resourceRef.name: "r730-cluster-cilium"
+                        }
+                        by: {
+                            apiVersion: "helm.m.crossplane.io/v1beta1"
+                            kind: "Release"
+                            resourceRef.name: "r730-cluster-gpu-operator"
+                        }
+                    }
+                }
+                {
+                    apiVersion: "protection.crossplane.io/v1beta1"
+                    kind: "Usage"
                     metadata.name: "r730-cluster-gpu-needs-cluster"
                     spec: {
                         replayDeletion: True

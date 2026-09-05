@@ -400,6 +400,32 @@ items = [
                 }
             }
         }
+        # The GPU operator uninstalls through a helm pre-delete hook Job, and
+        # that Job needs a pod sandbox, so it needs the CNI. Without this the
+        # two Releases race on teardown, Cilium wins, and the hook Job hangs
+        # on `plugin type="cilium-cni" failed (add): unable to connect to
+        # Cilium agent`, which strands the GPU Release and everything the
+        # Usage above holds behind it.
+        protection.Usage {
+            metadata = _metadata("gpu-operator-needs-cni") | {
+                name = "{}-gpu-needs-cni".format(_cluster)
+                namespace = _ns
+            }
+            spec = {
+                reason = "The GPU operator uninstalls through a hook Job that needs a CNI, so Cilium has to outlive it."
+                replayDeletion = True
+                of = {
+                    apiVersion = "helm.m.crossplane.io/v1beta1"
+                    kind = "Release"
+                    resourceRef = {name = "{}-cilium".format(_cluster)}
+                }
+                by = {
+                    apiVersion = "helm.m.crossplane.io/v1beta1"
+                    kind = "Release"
+                    resourceRef = {name = "{}-gpu-operator".format(_cluster)}
+                }
+            }
+        }
     # Updating the composite goes through `items` as well.
     metalv1.MetalCluster {
         metadata = {
