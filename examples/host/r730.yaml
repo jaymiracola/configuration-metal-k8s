@@ -1,0 +1,24 @@
+# A registered machine. Inventory, not part of any cluster: MetalCluster selects
+# hosts by the pool label rather than owning them.
+#
+# The three machine-specific values here are read off the hardware; see the
+# README. Dell requires the idrac-virtualmedia driver.
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: r730
+  namespace: metal
+  labels:
+    metal.kube.farm/pool: r730
+spec:
+  # Powered off until a MetalCluster claims it.
+  online: false
+  bootMode: UEFI
+  bootMACAddress: "00:0A:F7:37:76:B2"
+  bmc:
+    address: idrac-virtualmedia+https://192.168.120.66/redfish/v1/Systems/System.Embedded.1
+    credentialsName: r730-bmc
+    disableCertificateVerification: true
+  rootDeviceHints:
+    # By WWN, because size cannot distinguish this disk from the others.
+    wwn: "0x644a84202a22990032172a6b2f29119f"
